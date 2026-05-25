@@ -343,6 +343,12 @@ static const struct StringPair char_translations[] = {
     { ">=", 8805 }, // > or equal to sign
     { "aq", '\'' },
     { "tm", 8482 }, // trademark symbol
+    { "ti", '~' },  // tilde
+    { "ha", '^' },  // caret/chapeau
+    { "ga", '`' },  // accent grave
+    { "dq", '"' },  // guillemet double
+    { "bu", 8226 }, // • puce (U+2022)
+    { "bv", '|' },  // barre verticale
     { NULL, 0 }
 };
 
