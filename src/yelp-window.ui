@@ -27,6 +27,10 @@
         <attribute name="label" translatable="yes">Next Page</attribute>
         <attribute name="action">win.yelp-view-go-next</attribute>
       </item>
+      <item>
+        <attribute name="label">Historique</attribute>
+        <attribute name="action">win.yelp-view-history</attribute>
+      </item>
     </section>
     <section>
       <item>

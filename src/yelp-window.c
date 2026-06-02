@@ -1169,5 +1169,6 @@ present_about_dialog (YelpWindow *window)
                            "version", PACKAGE_VERSION,
                            /* TRANSLATORS Credit yourself here. Appears in about dialog. */
                            "translator-credits", _("translator-credits"),
+                           "comments", _("Patché par Grégo"),
                            NULL);
 }

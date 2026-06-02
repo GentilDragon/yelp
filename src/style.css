@@ -12,3 +12,67 @@
 .yelp-bookmark-menu row {
 	padding: 0; margin-bottom: 6px;
 }
+
+.yelp-history-overlay {
+	background-color: rgba(0, 0, 0, 0.5);
+	opacity: 0;
+	animation: yelp-history-overlay-fade-in 250ms ease-out both;
+}
+
+.yelp-history-panel {
+	/* Default: light theme - use a nearly-opaque white background */
+	background-color: rgba(255, 255, 255, 0.98);
+	border-radius: 16px;
+	box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+	opacity: 0;
+	transform: scale(0.75);
+	animation: yelp-history-panel-pop-in 250ms ease-out both;
+}
+
+.yelp-history-overlay-closing {
+	animation: yelp-history-overlay-fade-out 250ms ease-in both;
+}
+
+.yelp-history-panel-closing {
+	animation: yelp-history-panel-pop-out 250ms ease-in both;
+}
+
+@media (prefers-color-scheme: dark) {
+	.yelp-history-panel {
+		/* Dark theme: solid dark surface to avoid transparent look */
+		background-color: rgba(28, 28, 30, 0.95);
+	}
+}
+
+@keyframes yelp-history-overlay-fade-in {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+@keyframes yelp-history-overlay-fade-out {
+	from { opacity: 1; }
+	to { opacity: 0; }
+}
+
+@keyframes yelp-history-panel-pop-in {
+	from {
+		opacity: 0;
+		transform: scale(0.75);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+@keyframes yelp-history-panel-pop-out {
+	from {
+		opacity: 1;
+		transform: scale(1);
+	}
+	to {
+		opacity: 0;
+		transform: scale(0.75);
+	}
+}
+

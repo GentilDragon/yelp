@@ -102,6 +102,13 @@ static void        view_history_changed              (YelpView           *view);
 static void        view_navigation_action            (GAction            *action,
                                                       GVariant           *parameter,
                                                       YelpView           *view);
+static void        yelp_view_history_action          (GAction            *action,
+                                                      GVariant           *parameter,
+                                                      YelpView           *view);
+
+static void yelp_view_show_history_popup(YelpView *view);
+
+static void hist_button_init(GtkWidget *button);
 
 static void        view_clear_load                   (YelpView           *view);
 static void        view_load_page                    (YelpView           *view);
@@ -228,8 +235,13 @@ struct _YelpViewPrivate {
     GSimpleAction  *forward_action;
     GSimpleAction  *prev_action;
     GSimpleAction  *next_action;
+    GSimpleAction  *history_action;
 
     GSimpleActionGroup *popup_actions;
+
+    GtkWidget      *history_scrim;
+    GtkWidget      *history_panel;
+    guint           history_close_timeout_id;
 
     gboolean        resolve_uri_on_policy_decision;
     gboolean        load_page_after_resolved;
@@ -265,14 +277,17 @@ yelp_view_init (YelpView *view)
     priv->prevstate = priv->state = YELP_VIEW_STATE_BLANK;
 
     priv->resolve_uri_on_policy_decision = TRUE;
+    priv->history_close_timeout_id = 0;
     g_signal_connect (view, "decide-policy",
                       G_CALLBACK (view_policy_decision_requested), NULL);
     g_signal_connect (view, "load-changed",
                       G_CALLBACK (view_load_status_changed), NULL);
     g_signal_connect (view, "load-failed",
                       G_CALLBACK (view_load_failed), NULL);
-    g_signal_connect (view, "context-menu",
-                      G_CALLBACK (view_populate_context_menu), NULL);
+    /* Disabled to allow WebKit default context menu */
+
+    /* g_signal_connect (view, "context-menu",
+                      G_CALLBACK (view_populate_context_menu), NULL); */
     g_signal_connect (view, "script-dialog",
                       G_CALLBACK (view_script_dialog), NULL);
 
@@ -320,6 +335,13 @@ yelp_view_init (YelpView *view)
                       "activate",
                       G_CALLBACK (view_navigation_action),
                       view);
+
+    priv->history_action = g_simple_action_new ("yelp-view-history", NULL);
+    g_simple_action_set_enabled (priv->history_action, FALSE);
+    g_signal_connect (priv->history_action,
+                      "activate",
+                      G_CALLBACK (yelp_view_history_action),
+                      view);
 }
 
 static void
@@ -335,6 +357,7 @@ yelp_view_constructed (GObject *object)
                               "changed",
                               G_CALLBACK (view_history_changed),
                               view);
+    view_history_changed (view);
 
     priv->fonts_changed = g_signal_connect (settings,
                                             "fonts-changed",
@@ -389,10 +412,19 @@ yelp_view_dispose (GObject *object)
         g_object_unref (priv->next_action);
         priv->next_action = NULL;
     }
+    if (priv->history_action) {
+        g_object_unref (priv->history_action);
+        priv->history_action = NULL;
+    }
 
     if (priv->document) {
         g_object_unref (priv->document);
         priv->document = NULL;
+    }
+
+    if (priv->popup_actions) {
+        g_object_unref (priv->popup_actions);
+        priv->popup_actions = NULL;
     }
 
     G_OBJECT_CLASS (yelp_view_parent_class)->dispose (object);
@@ -415,7 +447,7 @@ yelp_view_finalize (GObject *object)
     g_free (priv->page_desc);
     g_free (priv->page_icon);
 
-    g_object_unref (priv->popup_actions);
+    
 
     G_OBJECT_CLASS (yelp_view_parent_class)->finalize (object);
 }
@@ -699,6 +731,7 @@ yelp_view_register_actions (YelpView   *view,
     g_action_map_add_action (map, G_ACTION (priv->forward_action));
     g_action_map_add_action (map, G_ACTION (priv->prev_action));
     g_action_map_add_action (map, G_ACTION (priv->next_action));
+    g_action_map_add_action (map, G_ACTION (priv->history_action));
 }
 
 /******************************************************************************/
@@ -1669,6 +1702,7 @@ view_load_status_changed (WebKitWebView   *view,
         }
 
         g_signal_emit (view, signals[LOADED], 0);
+        view_history_changed (YELP_VIEW (view));
 
         break;
     case WEBKIT_LOAD_STARTED:
@@ -1730,6 +1764,15 @@ view_history_changed (YelpView *view)
 
     g_simple_action_set_enabled (priv->back_action, webkit_web_view_can_go_back (web_view));
     g_simple_action_set_enabled (priv->forward_action, webkit_web_view_can_go_forward (web_view));
+    {
+        WebKitBackForwardList *list = webkit_web_view_get_back_forward_list (web_view);
+        GList *back = webkit_back_forward_list_get_back_list (list);
+        GList *forward = webkit_back_forward_list_get_forward_list (list);
+        gboolean has_history = (back != NULL) || (forward != NULL);
+        g_simple_action_set_enabled (priv->history_action, has_history);
+        if (back) g_list_free (back);
+        if (forward) g_list_free (forward);
+    }
 }
 
 static void
@@ -1762,6 +1805,252 @@ view_navigation_action (GAction  *action,
     g_free (new_id);
     g_object_unref (new_uri);
 }
+
+static void
+history_close_panel_now (YelpView *view)
+{
+    YelpViewPrivate *priv = yelp_view_get_instance_private (view);
+
+    if (priv->history_close_timeout_id) {
+        g_source_remove (priv->history_close_timeout_id);
+        priv->history_close_timeout_id = 0;
+    }
+
+    if (priv->history_panel) {
+        gtk_widget_unparent (priv->history_panel);
+        g_clear_object (&priv->history_panel);
+    }
+
+    if (priv->history_scrim) {
+        gtk_widget_unparent (priv->history_scrim);
+        g_clear_object (&priv->history_scrim);
+    }
+}
+
+static gboolean
+history_close_panel_done (gpointer user_data)
+{
+    YelpView *view = YELP_VIEW (user_data);
+    YelpViewPrivate *priv = yelp_view_get_instance_private (view);
+
+    priv->history_close_timeout_id = 0;
+    history_close_panel_now (view);
+    g_object_unref (view);
+
+    return G_SOURCE_REMOVE;
+}
+
+static void
+history_close_panel (YelpView *view)
+{
+    YelpViewPrivate *priv = yelp_view_get_instance_private (view);
+
+    if (priv->history_close_timeout_id) {
+        g_source_remove (priv->history_close_timeout_id);
+        priv->history_close_timeout_id = 0;
+    }
+
+    if (priv->history_panel)
+        gtk_widget_add_css_class (priv->history_panel, "yelp-history-panel-closing");
+
+    if (priv->history_scrim)
+        gtk_widget_add_css_class (priv->history_scrim, "yelp-history-overlay-closing");
+
+    if (priv->history_panel || priv->history_scrim)
+        priv->history_close_timeout_id = g_timeout_add (250, history_close_panel_done, g_object_ref (view));
+}
+
+static void
+history_scrim_pressed (GtkGesture *gesture,
+                       guint       n_press,
+                       double      x,
+                       double      y,
+                       gpointer    user_data)
+{
+    YelpView *view = YELP_VIEW (user_data);
+    history_close_panel (view);
+}
+
+static gboolean
+history_key_pressed (GtkEventControllerKey *controller,
+                     guint                  keyval,
+                     guint                  keycode,
+                     GdkModifierType        state,
+                     gpointer               user_data)
+{
+    if (keyval == GDK_KEY_Escape) {
+        YelpView *view = YELP_VIEW (user_data);
+        history_close_panel (view);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static GtkWidget *
+history_create_panel(YelpView *view,
+                     GtkWidget **out_scrim)
+{
+    GtkWidget *overlay = gtk_widget_get_parent (GTK_WIDGET (view));
+    if (!GTK_IS_OVERLAY (overlay))
+        return NULL;
+
+    GtkWidget *scrim = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class (scrim, "yelp-history-overlay");
+    gtk_widget_set_hexpand (scrim, TRUE);
+    gtk_widget_set_vexpand (scrim, TRUE);
+    gtk_widget_set_visible (scrim, TRUE);
+    gtk_widget_set_can_focus (scrim, TRUE);
+
+    GtkGesture *gesture = gtk_gesture_click_new ();
+    g_signal_connect (gesture, "pressed", G_CALLBACK (history_scrim_pressed), view);
+    gtk_widget_add_controller (scrim, GTK_EVENT_CONTROLLER (gesture));
+
+    GtkEventController *key_controller = gtk_event_controller_key_new ();
+    g_signal_connect (key_controller, "key-pressed", G_CALLBACK (history_key_pressed), view);
+    gtk_widget_add_controller (scrim, key_controller);
+
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), scrim);
+    gtk_widget_grab_focus (scrim);
+
+    GtkWidget *panel = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class (panel, "yelp-history-panel");
+    gtk_widget_set_hexpand (panel, FALSE);
+    gtk_widget_set_vexpand (panel, FALSE);
+    gtk_widget_set_halign (panel, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign (panel, GTK_ALIGN_CENTER);
+    gtk_widget_set_visible (panel, TRUE);
+    //gtk_widget_set_size_request (panel, 420, 520);
+
+    gtk_overlay_add_overlay (GTK_OVERLAY (overlay), panel);
+
+    *out_scrim = scrim;
+    return panel;
+}
+
+static void
+yelp_view_history_action (GAction  *action,
+                         GVariant *parameter,
+                         YelpView *view)
+{
+    yelp_view_show_history_popup (view);
+}
+
+typedef struct _HistButtonData HistButtonData;
+struct _HistButtonData {
+    YelpView *view;
+    WebKitBackForwardListItem *item;
+};
+
+static void
+hist_button_data_free (gpointer data)
+{
+    HistButtonData *d = (HistButtonData *) data;
+    g_object_unref (d->view);
+    g_object_unref (d->item);
+    g_free (data);
+}
+
+static void
+history_row_activated (GtkListBox   *box,
+                       GtkListBoxRow *row,
+                       gpointer       user_data)
+{
+    YelpView *view = YELP_VIEW (user_data);
+    HistButtonData *d = g_object_get_data (G_OBJECT (row), "hist-data");
+    if (!d || !d->view || !d->item)
+        return;
+        
+    webkit_web_view_go_to_back_forward_list_item (WEBKIT_WEB_VIEW (d->view), d->item);
+    history_close_panel (view);
+}
+
+static GtkWidget *
+create_history_row (YelpView                  *view,
+                    WebKitBackForwardListItem *item)
+{
+    const gchar *title = webkit_back_forward_list_item_get_title (item);
+    const gchar *uri = webkit_back_forward_list_item_get_uri (item);
+
+    GtkWidget *row = gtk_list_box_row_new ();
+    GtkWidget *action = adw_action_row_new ();
+    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (action), title ? title : uri);
+    adw_action_row_set_subtitle (ADW_ACTION_ROW (action), uri);
+    gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (row), action);
+
+    HistButtonData *d = g_new0 (HistButtonData, 1);
+    d->view = g_object_ref (view);
+    d->item = g_object_ref (item);
+
+    g_object_set_data_full (G_OBJECT (row), "hist-data", d, hist_button_data_free);
+
+    return row;
+}
+
+static void
+yelp_view_show_history_popup (YelpView *view)
+{
+    YelpViewPrivate *priv = yelp_view_get_instance_private (view);
+    GList *l;
+
+    history_close_panel_now (view);
+
+    WebKitBackForwardList *history_list = webkit_web_view_get_back_forward_list (WEBKIT_WEB_VIEW (view));
+    GList *back = webkit_back_forward_list_get_back_list (history_list);
+    GList *forward = webkit_back_forward_list_get_forward_list (history_list);
+
+    GtkWidget *panel = history_create_panel (view, &priv->history_scrim);
+    if (!panel)
+        return;
+
+    GtkWidget *list_box = gtk_list_box_new ();
+    gtk_list_box_set_selection_mode (GTK_LIST_BOX (list_box), GTK_SELECTION_NONE);
+    gtk_list_box_set_activate_on_single_click (GTK_LIST_BOX (list_box), TRUE);
+    g_signal_connect (list_box, "row-activated", G_CALLBACK (history_row_activated), view);
+    gtk_widget_add_css_class (GTK_WIDGET (list_box), "boxed-list");
+    gtk_widget_set_can_focus (list_box, TRUE);
+
+    GtkEventController *key_controller = gtk_event_controller_key_new ();
+    g_signal_connect (key_controller, "key-pressed", G_CALLBACK (history_key_pressed), view);
+    gtk_widget_add_controller (list_box, key_controller);
+
+    GtkWidget *scroll = gtk_scrolled_window_new ();
+    gtk_scrolled_window_set_policy (GTK_SCROLLED_WINDOW (scroll),
+                                    GTK_POLICY_NEVER,
+                                    GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request (scroll, 400, 500);
+    gtk_scrolled_window_set_child (GTK_SCROLLED_WINDOW (scroll), list_box);
+    gtk_box_append (GTK_BOX (panel), scroll);
+    gtk_widget_grab_focus (list_box);
+
+    for (l = back; l != NULL; l = l->next) {
+        WebKitBackForwardListItem *it = WEBKIT_BACK_FORWARD_LIST_ITEM (l->data);
+        GtkWidget *row = create_history_row (view, it);
+        gtk_list_box_append (GTK_LIST_BOX (list_box), GTK_WIDGET (row));
+    }
+
+    if (back && forward) {
+        GtkWidget *sep = gtk_separator_new (GTK_ORIENTATION_HORIZONTAL);
+        GtkWidget *sep_row = gtk_list_box_row_new ();
+        gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (sep_row), FALSE);
+        gtk_list_box_row_set_selectable (GTK_LIST_BOX_ROW (sep_row), FALSE);
+        gtk_list_box_row_set_child (GTK_LIST_BOX_ROW (sep_row), sep);
+        gtk_list_box_append (GTK_LIST_BOX (list_box), sep_row);
+    }
+
+    for (l = forward; l != NULL; l = l->next) {
+        WebKitBackForwardListItem *it = WEBKIT_BACK_FORWARD_LIST_ITEM (l->data);
+        GtkWidget *row = create_history_row (view, it);
+        gtk_list_box_append (GTK_LIST_BOX (list_box), GTK_WIDGET (row));
+    }
+
+    if (back)
+        g_list_free (back);
+    if (forward)
+        g_list_free (forward);
+
+    priv->history_panel = panel;
+}
+
 
 static void
 view_clear_load (YelpView *view)
@@ -1929,10 +2218,6 @@ view_show_error_page (YelpView *view,
             scheme = "ghelp";
             pkg = struri + 6;
         }
-        if (pkg != NULL)
-            content_end = g_markup_printf_escaped ("<p><a class='button' href='install-%s:%s'>%s</a></p>",
-                                                   scheme, pkg,
-                                                   _("Find Packages Containing This Document"));
         g_free (struri);
     }
 

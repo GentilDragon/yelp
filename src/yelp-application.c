@@ -194,6 +194,10 @@ yelp_application_init (YelpApplication *app)
     gtk_application_set_accels_for_action (GTK_APPLICATION (app),
                                            "win.yelp-view-go-next",
                                            (const gchar*[]) {"<Control>Page_Down", NULL});
+
+    gtk_application_set_accels_for_action (GTK_APPLICATION (app),
+                                           "win.yelp-view-history", 
+                                           (const gchar*[]) {"<Control>H", NULL});
 }
 
 static void

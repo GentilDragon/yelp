@@ -343,14 +343,37 @@ static const struct StringPair char_translations[] = {
     { ">=", 8805 }, // > or equal to sign
     { "aq", '\'' },
     { "tm", 8482 }, // trademark symbol
-    { "ti", '~' },  // tilde
-    { "ha", '^' },  // caret/chapeau
-    { "ga", '`' },  // accent grave
-    { "dq", '"' },  // guillemet double
-    { "bu", 8226 }, // • puce (U+2022)
-    { "bv", '|' },  // barre verticale
+    
+    // PATCH GREGO
+    { "ti", '~' },           // tilde
+    { "ha", '^' },           // caret/chapeau
+    { "ga", '`' },           // accent grave
+    { "dq", '"' },           // guillemet double
+    { "bu", 8226 },          // • puce (U+2022)
+    { "bv", '|' },           // barre verticale
+    
     { NULL, 0 }
 };
+
+/* Fast lookup map for char_translations: maps 'from' -> gunichar (stored as gint)
+ * Initialized on first use. */
+static GHashTable *char_translations_map = NULL;
+
+static void
+ensure_char_translations_map (void)
+{
+    guint k;
+
+    if (g_once_init_enter (&char_translations_map)) {
+        GHashTable *map = g_hash_table_new (g_str_hash, g_str_equal);
+        for (k = 0; char_translations[k].from; k++) {
+            g_hash_table_insert (map,
+                                 (gpointer)char_translations[k].from,
+                                 GINT_TO_POINTER ((gint)char_translations[k].to));
+        }
+        g_once_init_leave (&char_translations_map, map);
+    }
+}
 
 /******************************************************************************/
 
@@ -760,8 +783,10 @@ parse_body_text (YelpManParser *parser, GError **error)
 
     g_string_append (parser->accumulator, parser->buffer+1);
 
-    /* Move hpos forward per char */
-    parser->hpos += strlen (parser->buffer+1) * parser->char_width;
+    /* Move hpos forward per char. Use parser->length (bytes read)
+     * which avoids an extra strlen call on the buffer. */
+    parser->hpos += (((parser->length > 0) ? parser->length - 1 : 0)
+                     * parser->char_width);
 
     parser->last_char_was_space = FALSE;
 
@@ -880,7 +905,8 @@ finish_span (YelpManParser *parser)
 static guint
 dx_to_em_count (YelpManParser *parser, guint dx)
 {
-    return (int)(dx / ((float)parser->char_width));
+    if (parser->char_width == 0) return 0;
+    return dx / parser->char_width;
 }
 
 static gboolean
@@ -916,11 +942,28 @@ parse_N (YelpManParser *parser, GError **error)
 static void
 append_nbsps (YelpManParser *parser, guint k)
 {
-    for (; k > 0; k--) {
-        /* 0xc2 0xa0 is nonbreaking space in utf8 */
-        g_string_append_c (parser->accumulator, 0xc2);
-        g_string_append_c (parser->accumulator, 0xa0);
+    if (k == 0) return;
+    if (k <= 4) {
+        for (; k > 0; k--) {
+            g_string_append_c (parser->accumulator, 0xc2);
+            g_string_append_c (parser->accumulator, 0xa0);
+        }
+        return;
     }
+
+    /* For larger k, construct a temporary buffer and append once. */
+    gsize bytes = k * 2;
+    gchar *buf = g_malloc (bytes);
+    gchar *p = buf;
+    {
+        guint i;
+        for (i = 0; i < k; i++) {
+            *p++ = (gchar)0xc2;
+            *p++ = (gchar)0xa0;
+        }
+    }
+    g_string_append_len (parser->accumulator, buf, bytes);
+    g_free (buf);
 }
 
 static gboolean
@@ -935,14 +978,14 @@ parse_C (YelpManParser *parser, GError **error)
         RAISE_PARSE_ERROR ("Can't understand special character: %s");
     }
 
-    for (k=0; char_translations[k].from; k++) {
-        if (g_str_equal (char_translations[k].from, name)) {
-            code = char_translations[k].to;
-            break;
+    ensure_char_translations_map();
+    {
+        gpointer p = g_hash_table_lookup (char_translations_map, name);
+        if (p) {
+            code = (gunichar) GPOINTER_TO_INT (p);
+        } else if (sscanf (name, "u%x", &k) == 1) {
+            code = k;
         }
-    }
-    if (sscanf (name, "u%x", &k) == 1) {
-        code = k;
     }
 
     if (!code) {

@@ -652,6 +652,41 @@ yelp_document_set_up_id (YelpDocument *document,
     g_mutex_unlock (&document->priv->mutex);
 }
 
+static gchar *
+man_title_from_page_id (const gchar *page_id)
+{
+    const gchar *section;
+    gchar *name;
+
+    if (page_id == NULL)
+        return NULL;
+
+    section = strrchr (page_id, '.');
+    if (section && section != page_id) {
+        section++;
+        if (*section != '\0') {
+            const gchar *p;
+            gboolean valid = TRUE;
+
+            for (p = section; *p; p++) {
+                if (!g_ascii_isalnum (*p)) {
+                    valid = FALSE;
+                    break;
+                }
+            }
+
+            if (valid) {
+                name = g_strndup (page_id, section - page_id - 1);
+                gchar *title = g_strdup_printf ("man:%s(%s)", name, section);
+                g_free (name);
+                return title;
+            }
+        }
+    }
+
+    return g_strdup_printf ("man:%s", page_id);
+}
+
 gchar *
 yelp_document_get_root_title (YelpDocument *document,
                               const gchar  *page_id)
@@ -679,10 +714,15 @@ yelp_document_get_root_title (YelpDocument *document,
 
     g_mutex_unlock (&document->priv->mutex);
 
+    if (ret == NULL && document->priv->uri &&
+        yelp_uri_get_document_type (document->priv->uri) == YELP_URI_DOCUMENT_TYPE_MAN) {
+        ret = man_title_from_page_id (page_id);
+    }
+
     return ret;
 }
 
-gchar *
+char *
 yelp_document_get_page_title (YelpDocument *document,
                               const gchar  *page_id)
 {
@@ -703,6 +743,11 @@ yelp_document_get_page_title (YelpDocument *document,
 	    ret = g_strdup (ret);
     }
     g_mutex_unlock (&document->priv->mutex);
+
+    if (ret == NULL && document->priv->uri &&
+        yelp_uri_get_document_type (document->priv->uri) == YELP_URI_DOCUMENT_TYPE_MAN) {
+        ret = man_title_from_page_id (page_id);
+    }
 
     return ret;
 }
