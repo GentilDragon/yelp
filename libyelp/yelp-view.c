@@ -1921,6 +1921,14 @@ history_create_panel(YelpView *view,
     gtk_widget_set_visible (panel, TRUE);
     //gtk_widget_set_size_request (panel, 420, 520);
 
+    GtkWidget *title = gtk_label_new (_("Historique"));
+    gtk_widget_add_css_class (title, "title-4");  // Style Adwaita
+    gtk_widget_set_margin_top (title, 10);
+    gtk_widget_set_margin_bottom (title, 10);
+    gtk_widget_set_margin_start (title, 10);
+    gtk_widget_set_margin_end (title, 10);
+    gtk_box_append (GTK_BOX (panel), title);
+
     gtk_overlay_add_overlay (GTK_OVERLAY (overlay), panel);
 
     *out_scrim = scrim;
