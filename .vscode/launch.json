@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/builddir/src/yelp",
-            "args": ["man:readline"],
+            "args": ["man:ldd"],
             "stopAtEntry": false,
             "cwd": "${fileDirname}",
             "environment": [],
